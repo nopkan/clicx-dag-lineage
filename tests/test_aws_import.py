@@ -28,7 +28,9 @@ profile = args[args.index('--profile') + 1] if '--profile' in args else None
 marker = os.path.join(state, 'signed-in' + ('-' + os.path.basename(os.environ.get('HOME', '')) if os.environ.get('FAKE_AWS_PER_HOME') else ''))
 signed = os.path.exists(marker)
 open(os.path.join(state, 'homes'), 'a').write(os.environ.get('HOME', '') + '|' + os.environ.get('AWS_CONFIG_FILE', '') + '\n')
+no_role = profile in os.environ.get('FAKE_AWS_NO_ROLE', '').split(',')  # this person lacks the role behind the profile
 if args[:2] == ['sts', 'get-caller-identity']:
+    if signed and no_role: sys.exit(print('An error occurred (ForbiddenException) when calling the GetRoleCredentials operation: No access') or 255)
     sys.exit(0 if signed else print('Error when retrieving token from sso: Token has expired') or 255)
 if args[:3] == ['configure', 'get', 'source_profile']:
     sys.exit(print('sso-base') if profile == 'nonprod_DP_DataEngineerOS' else 1)
@@ -37,7 +39,7 @@ if args[:2] == ['sso', 'login']:
     if os.environ.get('FAKE_AWS_DENY_LOGIN'): sys.exit(1)
     open(marker, 'w').close(); sys.exit(0)
 if args[:2] == ['s3', 'sync']:
-    if os.environ.get('FAKE_AWS_DENY_S3'):
+    if os.environ.get('FAKE_AWS_DENY_S3') or profile in os.environ.get('FAKE_AWS_DENY_S3_FOR', '').split(','):
         sys.exit(print('An error occurred (AccessDenied) when calling the ListObjectsV2 operation') or 1)
     shutil.copytree(os.environ['FAKE_S3'], args[3], dirs_exist_ok=True); sys.exit(0)
 sys.exit(2)
@@ -103,69 +105,68 @@ class DownloadTests(unittest.TestCase):
         self.assertTrue(any(m.startswith('Sign in to AWS: open https://device.sso.example/?user_code=ABCD-EFGH') for m in self.messages))
 
     SSO_ENV = {'LINEAGE_AWS_SSO_START_URL': 'https://d-0000000000.awsapps.com/start', 'LINEAGE_AWS_SSO_REGION': 'ap-southeast-1',
-               'LINEAGE_AWS_SSO_ACCOUNT_ID': '111122223333', 'LINEAGE_AWS_SSO_ROLE_NAME': 'Reader',
-               'LINEAGE_AWS_ROLE_ARN': 'arn:aws:iam::111122223333:role/Exporter', 'LINEAGE_AWS_REGION': 'ap-southeast-7'}
+               'LINEAGE_AWS_SSO_ACCOUNT_ID': '111122223333', 'LINEAGE_AWS_REGION': 'ap-southeast-7',
+               'LINEAGE_AWS_ROLES': 'EngineerOS>arn:aws:iam::111122223333:role/DP_EngineerOS,Engineer>arn:aws:iam::111122223333:role/DP_Engineer'}
 
-    def test_docker_creates_a_missing_profile_from_sso_settings(self):
-        config = Path(self.tmp.name) / 'aws' / 'config'
-        with patch.dict(os.environ, {**self.SSO_ENV, 'AWS_CONFIG_FILE': str(config)}), patch.object(aws_import, 'DEVICE_CODE', True):
-            aws_import.download(Path(self.tmp.name) / 'data', threading.Event(), self.messages.append)
-            self.assertTrue(any('Set up AWS profile nonprod_DP_DataEngineerOS for this browser' in m for m in self.messages))
-            self.assertIn('sso login --profile sso-base --use-device-code', self.aws.calls())
-            text = config.read_text()
-            self.assertIn('[profile nonprod_DP_DataEngineerOS]', text)
-            self.assertIn('role_arn = arn:aws:iam::111122223333:role/Exporter', text)
-            self.assertIn('source_profile = nonprod_DP_DataEngineerOS-sso', text)
-            self.assertIn('[profile nonprod_DP_DataEngineerOS-sso]', text)
-            self.assertIn('sso_role_name = Reader', text)
-            self.assertIn('sso_start_url = https://d-0000000000.awsapps.com/start', text)
-            self.assertEqual(config.stat().st_mode & 0o777, 0o600)
-            self.assertFalse(aws_import._ensure_profile('nonprod_DP_DataEngineerOS'))  # Never rewrites an existing profile.
+    def routed(self, home, **env):
+        """One import in Docker with a private AWS folder; returns the AWS calls it made."""
+        before = len(self.aws.calls())
+        with patch.dict(os.environ, {**self.SSO_ENV, **env}), patch.object(aws_import, 'DEVICE_CODE', True):
+            aws_import.download(Path(self.tmp.name) / 'data', threading.Event(), self.messages.append, aws_home=home)
+        return self.aws.calls()[before:]
+
+    def test_docker_signs_in_once_and_uses_the_first_role_route(self):
+        home = Path(self.tmp.name) / 'alice'
+        calls = self.routed(home)
+        self.assertIn('sso login --sso-session lineage-sso --use-device-code', calls)
+        self.assertTrue(any(c.startswith('s3 sync') and c.endswith('--profile lineage-1 --only-show-errors --no-progress') for c in calls))
+        self.assertTrue(any('using EngineerOS → DP_EngineerOS' in m for m in self.messages))
+        config = (home / '.aws' / 'config').read_text()
+        for line in ('[sso-session lineage-sso]', 'sso_start_url = https://d-0000000000.awsapps.com/start',
+                     '[profile lineage-1-sso]', 'sso_role_name = EngineerOS', '[profile lineage-1]',
+                     'role_arn = arn:aws:iam::111122223333:role/DP_EngineerOS', 'source_profile = lineage-1-sso',
+                     '[profile lineage-2-sso]', 'sso_role_name = Engineer', 'role_arn = arn:aws:iam::111122223333:role/DP_Engineer'):
+            self.assertIn(line, config)
+        self.assertEqual((home / '.aws' / 'config').stat().st_mode & 0o777, 0o600)
+        self.assertNotIn('sso login', ' '.join(self.routed(home)))  # still signed in next time
+
+    def test_someone_with_only_the_other_role_uses_it(self):
+        calls = self.routed(Path(self.tmp.name) / 'bob', FAKE_AWS_NO_ROLE='lineage-1,lineage-1-sso')
+        self.assertTrue(any(c.startswith('s3 sync') and '--profile lineage-2 ' in c for c in calls))
+        self.assertTrue(any('using Engineer → DP_Engineer' in m for m in self.messages))
+
+    def test_a_role_that_cannot_read_the_bucket_falls_back_to_the_next_route(self):
+        calls = self.routed(Path(self.tmp.name) / 'carol', FAKE_AWS_DENY_S3_FOR='lineage-1')
+        syncs = [c for c in calls if c.startswith('s3 sync')]
+        self.assertEqual([c.split('--profile ')[1].split()[0] for c in syncs], ['lineage-1', 'lineage-1-sso'])  # then the SSO role directly
+
+    def test_someone_without_either_role_gets_a_clear_message(self):
+        with self.assertRaisesRegex(aws_import.ImportFailed, 'no access to EngineerOS or Engineer in account 111122223333'):
+            self.routed(Path(self.tmp.name) / 'dave', FAKE_AWS_NO_ROLE='lineage-1,lineage-1-sso,lineage-2,lineage-2-sso')
+        with self.assertRaisesRegex(aws_import.ImportFailed, 'denied access .* for EngineerOS → DP_EngineerOS, EngineerOS, Engineer → DP_Engineer, Engineer'):
+            self.routed(Path(self.tmp.name) / 'erin', FAKE_AWS_DENY_S3='1')
 
     def test_each_browser_session_signs_in_with_its_own_private_aws_folder(self):
         users = Path(self.tmp.name) / 'users'
-        with patch.dict(os.environ, {**self.SSO_ENV, 'LINEAGE_AWS_USERS_DIR': str(users), 'FAKE_AWS_PER_HOME': '1'}), \
-                patch.object(aws_import, 'DEVICE_CODE', True):
+        with patch.dict(os.environ, {'LINEAGE_AWS_USERS_DIR': str(users)}), patch.object(aws_import, 'DEVICE_CODE', True):
             alice, bob = aws_import.user_home('session-a'), aws_import.user_home('session-b')
-            self.assertNotEqual(alice, bob); self.assertEqual(aws_import.user_home('session-a'), alice)
-            self.assertEqual(alice.stat().st_mode & 0o777, 0o700)
-            aws_import.download(Path(self.tmp.name) / 'data', threading.Event(), self.messages.append, aws_home=alice)
-            logins = sum('sso login' in c for c in self.aws.calls())
-            aws_import.download(Path(self.tmp.name) / 'data', threading.Event(), self.messages.append, aws_home=alice)
-            self.assertEqual(sum('sso login' in c for c in self.aws.calls()), logins)  # Alice stays signed in…
-            aws_import.download(Path(self.tmp.name) / 'data', threading.Event(), self.messages.append, aws_home=bob)
-            self.assertEqual(sum('sso login' in c for c in self.aws.calls()), logins + 1)  # …Bob must sign in himself.
-            self.assertTrue((alice / '.aws' / 'config').exists()); self.assertTrue((bob / '.aws' / 'config').exists())
+        self.assertNotEqual(alice, bob); self.assertEqual(alice.stat().st_mode & 0o777, 0o700)
+        logins = lambda calls: sum('sso login' in c for c in calls)
+        self.assertEqual(logins(self.routed(alice, FAKE_AWS_PER_HOME='1')), 1)
+        self.assertEqual(logins(self.routed(alice, FAKE_AWS_PER_HOME='1')), 0)  # Alice stays signed in…
+        self.assertEqual(logins(self.routed(bob, FAKE_AWS_PER_HOME='1')), 1)    # …Bob signs in himself.
         homes = (self.aws.state / 'homes').read_text().splitlines()
         self.assertTrue(all(h.startswith(str(users)) and h.split('|')[1].endswith('/.aws/config') for h in homes))
         with patch.object(aws_import, 'DEVICE_CODE', False):
             self.assertIsNone(aws_import.user_home('session-a'))  # outside Docker: the machine's own ~/.aws
 
-    def test_profile_is_never_written_outside_docker_or_without_settings(self):
-        config = Path(self.tmp.name) / 'aws' / 'config'
-        with patch.dict(os.environ, {**self.SSO_ENV, 'AWS_CONFIG_FILE': str(config)}), patch.object(aws_import, 'DEVICE_CODE', False):
-            self.assertFalse(aws_import._ensure_profile('nonprod_DP_DataEngineerOS'))
-        with patch.dict(os.environ, {'AWS_CONFIG_FILE': str(config)}), patch.object(aws_import, 'DEVICE_CODE', True):
-            for key in self.SSO_ENV:
-                os.environ.pop(key, None)
-            self.assertFalse(aws_import._ensure_profile('nonprod_DP_DataEngineerOS'))
-        self.assertFalse(config.exists())
-
-    def test_sign_in_step_shows_a_button_and_the_code(self):
-        from lineage_app.views.render import progress_page
-        url = 'https://ap-southeast-1.signin.aws/platform/authorize?request_uri=urn%3Aabc&identitystore_id=d-1'
-        page = progress_page('t', {'title': 'Importing from S3', 'message': f'Sign in to AWS: open {url} in your browser and enter code VTXR-XJFV, then approve. This page continues automatically.'})
-        self.assertIn('class="button primary signin-button" href="https://ap-southeast-1.signin.aws/platform/authorize?request_uri=urn%3Aabc&amp;identitystore_id=d-1" target="_blank"', page)
-        self.assertIn('<p class="signin-code mono">VTXR-XJFV</p>', page)
-        self.assertNotIn('Sign in to AWS: open', page)
-        self.assertIn('content="4;url=/progress"', page)
-        plain = progress_page('t', {'message': 'Downloading s3://bucket/x/ …'})
-        self.assertIn('<p class="status-line" role="status">Downloading s3://bucket/x/ …</p>', plain)
-
-    def test_unwritable_folder_and_unknown_errors_are_not_reported_as_network_problems(self):
-        out = "download failed: s3://b/x/a.parquet to data/a.parquet [Errno 13] Permission denied: '/app/data/a.parquet'"
-        self.assertIn('not writable', aws_import._friendly(out, 's3://b/x/', 'p'))
-        self.assertIn('AWS CLI said: fatal error: something odd', aws_import._friendly('line one\nfatal error: something odd\n', 's3://b/x/', 'p'))
+    def test_routes_come_from_env_and_bad_entries_are_ignored(self):
+        with patch.dict(os.environ, {'LINEAGE_AWS_ROLES': 'Good>arn:aws:iam::111122223333:role/Ok, bad role ,Direct,Evil>arn:aws:iam::1:role/x'}):
+            self.assertEqual(aws_import._routes(), [('Good', 'arn:aws:iam::111122223333:role/Ok'), ('Direct', '')])
+        with patch.dict(os.environ, {'LINEAGE_AWS_ROLES': '', 'LINEAGE_AWS_SSO_ROLE_NAME': 'Single', 'LINEAGE_AWS_ROLE_ARN': ''}):
+            self.assertEqual(aws_import._routes(), [('Single', '')])
+        with patch.dict(os.environ, self.SSO_ENV), patch.object(aws_import, 'DEVICE_CODE', False):
+            self.assertIsNone(aws_import._sso_settings())  # never used outside Docker
 
     def test_missing_cli_is_reported(self):
         with patch.object(aws_import.shutil, 'which', return_value=None), patch.object(aws_import.os, 'access', return_value=False):

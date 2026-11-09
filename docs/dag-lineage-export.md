@@ -66,7 +66,7 @@ The existing visuals still derive dependencies from tags. They do not yet draw `
 
 The image includes AWS CLI v2 (`AWS_CLI_VERSION` build argument) and sets `LINEAGE_AWS_DEVICE_CODE=1`: a container cannot open your Mac's browser, so an expired sign-in shows a link and code on the progress page instead.
 
-Your Mac's `~/.aws` is **not** mounted. Put the SSO settings in `.env` (see `.env.example`): start URL, SSO region, account, role, and the role the profile assumes. They say where to sign in; they are not credentials, and `.env` is not committed.
+Your Mac's `~/.aws` is **not** mounted. Put the SSO settings in `.env` (see `.env.example`): start URL, SSO region, account, and `LINEAGE_AWS_ROLES`, the roles to try in order (`ssoRole>roleArnToAssume,…`). After signing in, each person uses the first route their account has that can read the S3 folder: the role it assumes, then the SSO role directly. Someone with none of the roles is told which roles to request. They say where to sign in; they are not credentials, and `.env` is not committed.
 
 Every browser session gets its **own** private AWS folder in the container's temporary storage. When someone clicks Import data, the page shows them an **Open AWS sign-in** button and a code, and they approve with their own AWS account. One person's sign-in is never used for another. Restarting the container clears all sign-ins.
 

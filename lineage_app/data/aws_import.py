@@ -17,8 +17,8 @@ missing there, it is written from these settings (put them in .env; they are not
   LINEAGE_AWS_SSO_START_URL   https://d-xxxxxxxxxx.awsapps.com/start
   LINEAGE_AWS_SSO_REGION      e.g. ap-southeast-1
   LINEAGE_AWS_SSO_ACCOUNT_ID  12-digit AWS account
-  LINEAGE_AWS_SSO_ROLE_NAME   permission set the SSO sign-in uses
-  LINEAGE_AWS_ROLE_ARN        optional: role the profile then assumes (source_profile chain)
+  LINEAGE_AWS_ROLES           roles to try in order: ssoRole>roleArnToAssume,otherRole>arn (">arn" optional);
+                              each person uses the first one their account has that can read the bucket
   LINEAGE_AWS_REGION          default region for the profile
 """
 import hashlib
@@ -146,45 +146,50 @@ def _config_path():
 
 
 def _sso_settings():
+    """Where to sign in (from .env). None outside Docker or when the settings are incomplete."""
     keys = dict(start_url='LINEAGE_AWS_SSO_START_URL', sso_region='LINEAGE_AWS_SSO_REGION',
-                account_id='LINEAGE_AWS_SSO_ACCOUNT_ID', role_name='LINEAGE_AWS_SSO_ROLE_NAME',
-                role_arn='LINEAGE_AWS_ROLE_ARN', region='LINEAGE_AWS_REGION')
+                account_id='LINEAGE_AWS_SSO_ACCOUNT_ID', region='LINEAGE_AWS_REGION')
     values = {k: os.environ.get(v, '').strip() for k, v in keys.items()}
-    return values if all(values[k] for k in ('start_url', 'sso_region', 'account_id', 'role_name')) else None
+    if not DEVICE_CODE or not all(values[k] for k in ('start_url', 'sso_region', 'account_id')):
+        return None
+    values['routes'] = _routes()
+    return values if values['routes'] else None
 
 
-def _ensure_profile(profile):
-    """Docker only: write a missing profile from LINEAGE_AWS_SSO_* into the container's config.
+def _routes():
+    """Roles to try, in order: LINEAGE_AWS_ROLES="ssoRole>roleArnToAssume,otherRole>arn,…" (the >arn part is
+    optional). Falls back to the single LINEAGE_AWS_SSO_ROLE_NAME / LINEAGE_AWS_ROLE_ARN pair."""
+    raw = os.environ.get('LINEAGE_AWS_ROLES', '').strip()
+    pairs = [part.split('>', 1) for part in raw.split(',') if part.strip()] if raw else \
+        [[os.environ.get('LINEAGE_AWS_SSO_ROLE_NAME', ''), os.environ.get('LINEAGE_AWS_ROLE_ARN', '')]]
+    routes = []
+    for pair in pairs:
+        role = pair[0].strip(); arn = pair[1].strip() if len(pair) > 1 else ''
+        if re.fullmatch(r'[\w+=,.@-]{1,64}', role) and (not arn or re.fullmatch(r'arn:aws[\w-]*:iam::\d{12}:role/[\w+=,.@/-]{1,128}', arn)):
+            routes.append((role, arn))
+    return routes
 
-    Returns True when it was added. Never edits a profile that already exists, and never runs
-    outside Docker (where ~/.aws/config is the user's own file).
-    """
-    sso = _sso_settings()
-    if not DEVICE_CODE or not sso:
-        return False
-    path = _config_path()
+
+def _write_route_profiles(sso):
+    """This browser's private config: one SSO login, and a profile per route. Returns (label, profile) to try, in order."""
     config = configparser.RawConfigParser()
-    config.read(path)
-    section = 'default' if profile == 'default' else f'profile {profile}'
-    if config.has_section(section):
-        return False
-    session, base = 'lineage-sso', f'{profile}-sso'
-    if not config.has_section(f'sso-session {session}'):
-        config[f'sso-session {session}'] = dict(sso_start_url=sso['start_url'], sso_region=sso['sso_region'],
-                                                sso_registration_scopes='sso:account:access')
-    sso_profile = dict(sso_session=session, sso_account_id=sso['account_id'], sso_role_name=sso['role_name'])
-    if sso['region']:
-        sso_profile['region'] = sso['region']
-    if sso['role_arn']:
-        config[f'profile {base}'] = sso_profile
-        config[section] = dict(role_arn=sso['role_arn'], source_profile=base, **({'region': sso['region']} if sso['region'] else {}))
-    else:
-        config[section] = sso_profile
+    config['sso-session lineage-sso'] = dict(sso_start_url=sso['start_url'], sso_region=sso['sso_region'],
+                                             sso_registration_scopes='sso:account:access')
+    region = {'region': sso['region']} if sso['region'] else {}
+    candidates = []
+    for index, (role, arn) in enumerate(sso['routes'], 1):
+        base = f'lineage-{index}-sso'
+        config[f'profile {base}'] = dict(sso_session='lineage-sso', sso_account_id=sso['account_id'], sso_role_name=role, **region)
+        if arn:
+            config[f'profile lineage-{index}'] = dict(role_arn=arn, source_profile=base, **region)
+            candidates.append((f'{role} → {arn.rsplit("/", 1)[-1]}', f'lineage-{index}'))
+        candidates.append((role, base))  # the SSO role directly, if it may read S3 itself
+    path = _config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w') as handle:
         config.write(handle)
     path.chmod(0o600)
-    return True
+    return candidates
 
 
 def _friendly(output, s3_uri, profile):
@@ -193,7 +198,7 @@ def _friendly(output, s3_uri, profile):
     if 'NoSuchBucket' in output:
         return f'The S3 bucket in {s3_uri} does not exist.'
     if 'could not be found' in output and 'profile' in output:
-        where = (' In Docker, set LINEAGE_AWS_SSO_START_URL, _SSO_REGION, _SSO_ACCOUNT_ID and _SSO_ROLE_NAME '
+        where = (' In Docker, set LINEAGE_AWS_SSO_START_URL, _SSO_REGION, _SSO_ACCOUNT_ID and LINEAGE_AWS_ROLES '
                  'in .env (see .env.example) so the sign-in can start.'
                  if DEVICE_CODE else '')
         return f'AWS profile {profile} is not configured on this machine (~/.aws/config).' + where
@@ -224,34 +229,75 @@ def _download(data_root, cancel, progress, s3_uri, profile, stage):
         raise ImportFailed(str(exc)) from None
     s3_uri, profile, stage = chosen['s3_uri'], chosen['profile'], chosen['stage']
     aws = _aws()
-    if _ensure_profile(profile):
-        progress(f'Set up AWS profile {profile} for this browser from the LINEAGE_AWS_SSO_* settings.')
+    target = Path(data_root) / stage / 'dag_lineage'
+    sso = _sso_settings()
+    if sso:
+        return _download_with_routes(aws, cancel, progress, sso, s3_uri, target)
     progress(f'Checking AWS sign-in for profile {profile}…')
     if not _signed_in(aws, cancel, profile):
         login = _login_profile(aws, cancel, profile)
-        progress('Approve the AWS sign-in that opened in your browser…')
-        found = {}
-
-        def show(line):
-            for key, pattern in (('url', URL), ('code', CODE)):
-                match = pattern.search(line)
-                if match and key not in found:
-                    found[key] = match[0]
-            if 'url' in found:
-                extra = f' and enter code {found["code"]}' if 'code' in found and found['code'] not in found['url'] else ''
-                progress(f'Sign in to AWS: open {found["url"]} in your browser{extra}, then approve. '
-                         'This page continues automatically.')
-        # In Docker there is no local browser or localhost callback: use the device-code flow.
-        command = [aws, 'sso', 'login', '--profile', login] + (['--use-device-code'] if DEVICE_CODE else [])
-        code, output = _run(command, cancel, 600, show)
+        code, output = _sign_in(aws, cancel, progress, ['--profile', login])
         if code != 0 or not _signed_in(aws, cancel, profile):
             raise ImportFailed(_friendly(output, s3_uri, profile) if 'profile' in output else
                                'AWS sign-in did not complete. Click Import data to try again.')
-    target = Path(data_root) / stage / 'dag_lineage'
-    target.mkdir(parents=True, exist_ok=True)
-    progress(f'Downloading {s3_uri} …')
-    code, output = _run([aws, 's3', 'sync', s3_uri, str(target), '--profile', profile,
-                         '--only-show-errors', '--no-progress'], cancel, 1800)
+    code, output = _sync(aws, cancel, progress, s3_uri, target, profile)
     if code != 0:
         raise ImportFailed(_friendly(output, s3_uri, profile))
     return target
+
+
+def _sign_in(aws, cancel, progress, target_args):
+    """Run aws sso login and show its link + code on the progress page."""
+    progress('Approve the AWS sign-in that opened in your browser…')
+    found = {}
+
+    def show(line):
+        for key, pattern in (('url', URL), ('code', CODE)):
+            match = pattern.search(line)
+            if match and key not in found:
+                found[key] = match[0]
+        if 'url' in found:
+            extra = f' and enter code {found["code"]}' if 'code' in found and found['code'] not in found['url'] else ''
+            progress(f'Sign in to AWS: open {found["url"]} in your browser{extra}, then approve. '
+                     'This page continues automatically.')
+    # In Docker there is no local browser or localhost callback: use the device-code flow.
+    command = [aws, 'sso', 'login', *target_args] + (['--use-device-code'] if DEVICE_CODE else [])
+    return _run(command, cancel, 600, show)
+
+
+def _sync(aws, cancel, progress, s3_uri, target, profile):
+    target.mkdir(parents=True, exist_ok=True)
+    progress(f'Downloading {s3_uri} …')
+    return _run([aws, 's3', 'sync', s3_uri, str(target), '--profile', profile,
+                 '--only-show-errors', '--no-progress'], cancel, 1800)
+
+
+def _download_with_routes(aws, cancel, progress, sso, s3_uri, target):
+    """Docker: one SSO sign-in per person, then the first configured role that can read the bucket."""
+    candidates = _write_route_profiles(sso)
+    roles = ' or '.join(role for role, _ in sso['routes'])
+
+    def working():
+        return [(label, name) for label, name in candidates if _signed_in(aws, cancel, name)]
+    progress('Checking AWS sign-in…')
+    usable = working()
+    if not usable:
+        code, output = _sign_in(aws, cancel, progress, ['--sso-session', 'lineage-sso'])
+        if code != 0:
+            raise ImportFailed('AWS sign-in did not complete. Click Import data to try again.')
+        usable = working()
+        if not usable:
+            raise ImportFailed(f'You signed in, but your AWS account has no access to {roles} in account '
+                               f'{sso["account_id"]}. Ask your AWS administrator for one of these roles.')
+    denied = []
+    for label, name in usable:
+        progress(f'Signed in to AWS · using {label}')
+        code, output = _sync(aws, cancel, progress, s3_uri, target, name)
+        if code == 0:
+            return target
+        if 'AccessDenied' in output or 'not authorized' in output:
+            denied.append(label)
+            continue
+        raise ImportFailed(_friendly(output, s3_uri, label))
+    raise ImportFailed(f'AWS denied access to {s3_uri} for {", ".join(denied)}. '
+                       'The role needs s3:ListBucket and s3:GetObject on that folder.')
