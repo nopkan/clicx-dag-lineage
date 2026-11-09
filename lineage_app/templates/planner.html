@@ -1,0 +1,26 @@
+<section class="panel gantt-panel">
+  <div class="gantt-top">
+    <form class="gantt-pick" method="get" action="/app">
+      <input type="hidden" name="view" value="planner">
+      <label class="screen-reader" for="planner-dag">DAG</label>
+      <input id="planner-dag" name="plan_dag" list="planner-dags" value="$dag" autocomplete="off" required>
+      <datalist id="planner-dags">$suggestions</datalist>
+      <button class="button primary">View</button>
+    </form>
+    <details class="gantt-exp" $exp_open>
+      <summary class="button gantt-exp-button" title="Experiment: try a different start and end time" aria-label="Experiment with start and end time">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6.2L4.6 18.4A1.7 1.7 0 0 0 6.1 21h11.8a1.7 1.7 0 0 0 1.5-2.6L14 9.2V3"/><path d="M7.2 15h9.6"/></svg>
+      </summary>
+      <form class="gantt-exp-popup" method="get" action="/app">
+        <input type="hidden" name="view" value="planner"><input type="hidden" name="plan_dag" value="$dag">
+        <h3>Experiment</h3>
+        <p>Try a different time for <strong>$dag</strong>. Other DAGs keep their real times.</p>
+        <label for="exp-start"><span>Start</span><input id="exp-start" type="time" name="plan_start" value="$exp_start" required></label>
+        <label for="exp-end"><span>End <small>blank = same run time as today</small></span><input id="exp-end" type="time" name="plan_end" value="$exp_end"></label>
+        <div class="gantt-exp-actions"><button class="button primary">Apply</button><a class="reset-link" href="$reset">Clear</a></div>
+      </form>
+    </details>
+    $chip
+  </div>
+  <div class="gantt-chart" role="region" tabindex="0" aria-label="DAG schedule chart">$graph</div>
+</section>

@@ -1,0 +1,5 @@
+<div class="global-filters dependency-find-bar">
+  <div class="search-field"><span>⌕</span><input name="dag_search" form="dependency-state" value="$query" list="dependency-dag-options" placeholder="Find DAG" aria-label="Find DAG" autocomplete="off"><datalist id="dependency-dag-options">$suggestions</datalist></div>
+  <button class="button small" type="submit" form="dependency-state" formaction="/dependency/find">Find</button>
+  <form class="dependency-filter-controls" action="/app" method="get"><input type="hidden" name="view" value="dependency">$source_filters$state_filter$tags<button class="button small" type="submit">Apply</button><a class="reset-link" href="/app?view=dependency">Reset</a></form>
+</div>

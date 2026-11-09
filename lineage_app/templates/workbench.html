@@ -1,0 +1,18 @@
+<div class="workspace" $workspace_inert$display_attributes>
+  $icon_definitions
+  <aside class="sidebar" id="workspace-sidebar"><div class="sidebar-heading">
+    <a href="/app" class="brand sidebar-brand" aria-label="CLICX Lineage home"><img src="/static/clicx.svg" alt="CLICX" width="112" height="28"></a>
+    <input type="checkbox" id="sidebar-collapsed" hidden aria-hidden="true" tabindex="-1" $sidebar_checked>
+    <button class="sidebar-toggle" type="submit" form="$sidebar_form" formaction="/app" name="sidebar" value="$sidebar_action" title="$sidebar_label" aria-label="$sidebar_label" aria-controls="workspace-sidebar" aria-expanded="$sidebar_expanded">$sidebar_collapse_icon$sidebar_expand_icon</button>
+  </div><div class="sidebar-product">Lineage</div><nav aria-label="Workspace">$navigation</nav><div class="sidebar-bottom">$settings_link<div class="cache-indicator"><span class="live-dot"></span><span>$cache_mode</span></div><form method="post" action="/disconnect"><input type="hidden" name="csrf" value="$csrf"><button class="sidebar-link" type="submit" title="Change connection" aria-label="Change connection">$connection_icon<span>Change connection</span></button></form></div></aside>
+  $sidebar_state
+  <div class="workspace-main"><header class="topbar"><div class="breadcrumb">$day_label · Bangkok</div><div class="top-actions">$source_badge$top_export<form action="/refresh" method="post"><input type="hidden" name="csrf" value="$csrf"><input type="hidden" name="return_to" value="$return_to"><button class="button small primary">↻ Refresh</button></form>$theme_switch</div></header>
+  <main class="main-content"><div class="$page_heading_class"><h1>$view_title</h1>$page_context<div class="freshness">$freshness</div></div>
+  $warnings
+  <div class="metrics">$metrics</div>
+  $global_filters
+  $content
+  <footer class="workspace-footer"><span><span class="live-dot"></span> Local Parquet</span><span>Snapshot $snapshot_date</span></footer>
+  </main></div>
+</div>
+$refresh_prompt

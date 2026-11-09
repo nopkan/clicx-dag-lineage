@@ -1,0 +1,13 @@
+<div class="refresh-overlay">
+  <section class="refresh-dialog" role="dialog" aria-modal="true" aria-labelledby="refresh-title">
+    <div class="refresh-heading"><h2 id="refresh-title">Refresh from Airflow</h2><a href="$return_to" class="button small" aria-label="Close">×</a></div>
+    <p>$stage · Today, Bangkok</p>
+    $error
+    <form action="/refresh" method="post" autocomplete="off">
+      <input type="hidden" name="csrf" value="$csrf">
+      <input type="hidden" name="return_to" value="$return_to">
+      $credential_fields
+      <div class="refresh-actions"><a class="button" href="$return_to">Cancel</a><button class="button primary" type="submit">Refresh ↗</button></div>
+    </form>
+  </section>
+</div>

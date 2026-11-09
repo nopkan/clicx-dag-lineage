@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="ui-icon-definitions" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="ui-planner" viewBox="0 0 24 24">
+      <rect x="3.5" y="5" width="17" height="16" rx="2"/>
+      <path d="M7.5 3v4m9-4v4M3.5 10h17M12 13v3l2 1"/>
+    </symbol>
+    <symbol id="ui-settings" viewBox="0 0 24 24">
+      <path d="m9.5 3-.6 2.3-1.5.9-2.3-.6-2.5 4.3 1.7 1.7v1.8l-1.7 1.7 2.5 4.3 2.3-.6 1.5.9.6 2.3h5l.6-2.3 1.5-.9 2.3.6 2.5-4.3-1.7-1.7v-1.8l1.7-1.7-2.5-4.3-2.3.6-1.5-.9L14.5 3Z"/>
+      <circle cx="12" cy="12.5" r="3"/>
+    </symbol>
+    <symbol id="ui-send" viewBox="0 0 24 24">
+      <path d="M12 20V4m-7 7 7-7 7 7"/>
+    </symbol>
+    <symbol id="ui-ai" viewBox="0 0 24 24">
+      <path d="M14 4H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h2v3l4-3h8a2 2 0 0 0 2-2v-5M17.5 2l1.2 3.3L22 6.5l-3.3 1.2-1.2 3.3-1.2-3.3L13 6.5l3.3-1.2L17.5 2Z"/>
+      <path d="M7 10h4M7 14h9"/>
+    </symbol>
+    <symbol id="ui-overview" viewBox="0 0 24 24">
+      <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.4"/>
+      <rect x="14" y="3.5" width="6.5" height="6.5" rx="1.4"/>
+      <rect x="3.5" y="14" width="6.5" height="6.5" rx="1.4"/>
+      <rect x="14" y="14" width="6.5" height="6.5" rx="1.4"/>
+    </symbol>
+    <symbol id="ui-lineage" viewBox="0 0 24 24">
+      <rect x="9" y="3" width="6" height="5" rx="1.4"/>
+      <rect x="3" y="16" width="6" height="5" rx="1.4"/>
+      <rect x="15" y="16" width="6" height="5" rx="1.4"/>
+      <path d="M12 8v4M6 16v-4h12v4"/>
+    </symbol>
+    <symbol id="ui-dependency" viewBox="0 0 24 24">
+      <rect x="3" y="9" width="5.5" height="6" rx="1.4"/>
+      <rect x="15.5" y="3" width="5.5" height="6" rx="1.4"/>
+      <rect x="15.5" y="15" width="5.5" height="6" rx="1.4"/>
+      <path d="M8.5 12H12V6h3.5M12 12v6h3.5"/>
+    </symbol>
+    <symbol id="ui-inventory" viewBox="0 0 24 24">
+      <rect x="3.5" y="4" width="3.5" height="3.5" rx=".8"/>
+      <rect x="3.5" y="10.25" width="3.5" height="3.5" rx=".8"/>
+      <rect x="3.5" y="16.5" width="3.5" height="3.5" rx=".8"/>
+      <path d="M11 5.75h9.5M11 12h9.5M11 18.25h9.5"/>
+    </symbol>
+    <symbol id="ui-performance" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5"/>
+      <path d="m12 12 4-4M12 3.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4"/>
+      <circle cx="12" cy="12" r="1.2"/>
+    </symbol>
+    <symbol id="ui-troubleshooting" viewBox="0 0 24 24">
+      <circle cx="10.5" cy="10.5" r="7"/>
+      <path d="m15.6 15.6 4.9 4.9M7 11h2l1.5-3 2 5 1.5-2"/>
+    </symbol>
+    <symbol id="ui-health" viewBox="0 0 24 24">
+      <rect x="3" y="4.5" width="18" height="15" rx="2"/>
+      <path d="M6 12h2.5l2-4 3 8 2-4H18"/>
+    </symbol>
+    <symbol id="ui-raws" viewBox="0 0 24 24">
+      <ellipse cx="12" cy="5.5" rx="8" ry="3"/>
+      <path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>
+    </symbol>
+    <symbol id="ui-connection" viewBox="0 0 24 24">
+      <path d="M8.5 3v4M15.5 3v4M6 7h12v3a6 6 0 0 1-6 6v5M12 16a6 6 0 0 1-6-6"/>
+    </symbol>
+    <symbol id="ui-sidebar-collapse" viewBox="0 0 24 24">
+      <rect x="3.5" y="4" width="17" height="16" rx="2"/>
+      <path d="M8.5 4v16m7.5-12-4 4 4 4"/>
+    </symbol>
+    <symbol id="ui-sidebar-expand" viewBox="0 0 24 24">
+      <rect x="3.5" y="4" width="17" height="16" rx="2"/>
+      <path d="M8.5 4v16m4-12 4 4-4 4"/>
+    </symbol>
+  </defs>
+</svg>

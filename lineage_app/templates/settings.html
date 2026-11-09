@@ -1,0 +1,35 @@
+<form class="settings-form" method="post" action="/settings">
+  <input type="hidden" name="csrf" value="$csrf">
+  $notice$error
+  <section class="panel settings-section" aria-labelledby="settings-saved-heading">
+    <div class="panel-heading"><div><h2 id="settings-saved-heading">Data shown</h2><p>Applies to every page. Times are Bangkok time.</p></div></div>
+    <div class="source-row"><span class="source-row-label">Airflow</span>$airflow_choice</div>
+    <div class="source-row source-row-dates"><span class="source-row-label">Date</span><span class="muted">Dates downloaded to this machine, newest first</span></div>
+    $saved_data
+  </section>
+  <section class="panel settings-section" aria-labelledby="settings-tabs-heading">
+    <div class="panel-heading"><div><h2 id="settings-tabs-heading">Sidebar tabs</h2><p>Choose what appears in your navigation.</p></div></div>
+    <div class="settings-tabs">$tabs</div>
+  </section>
+  <section class="panel settings-section" aria-labelledby="settings-display-heading">
+    <div class="panel-heading"><h2 id="settings-display-heading">Display</h2></div>
+    <div class="settings-display">
+      <label for="settings-start"><span>Landing page</span><select id="settings-start" name="start">$start</select></label>
+      <label for="settings-density"><span>Table spacing</span><select id="settings-density" name="density">$density</select></label>
+      <label for="settings-text"><span>Text size</span><select id="settings-text" name="text">$text</select></label>
+      <label for="settings-theme"><span>Theme</span><select id="settings-theme" name="theme">$theme</select></label>
+      <label for="settings-accent"><span>Accent colour</span><select id="settings-accent" name="accent">$accent</select></label>
+      <label for="settings-width"><span>Content width</span><select id="settings-width" name="width">$width</select></label>
+      <label for="settings-rows"><span>Table rows</span><select id="settings-rows" name="rows">$rows</select></label>
+      <label for="settings-status"><span>Status colours</span><select id="settings-status" name="status">$status</select></label>
+    </div>
+  </section>
+  <section class="panel settings-section" aria-labelledby="settings-colors-heading">
+    <div class="panel-heading"><h2 id="settings-colors-heading">Airflow tag colors</h2></div>
+    <div class="settings-colors">
+      <label class="settings-color-row" for="settings-data-platform-color">$data_platform_badge<input id="settings-data-platform-color" name="data_platform_color" type="color" value="$data_platform_color" aria-label="Data Platform tag color"></label>
+      <label class="settings-color-row" for="settings-risk-team-color">$risk_team_badge<input id="settings-risk-team-color" name="risk_team_color" type="color" value="$risk_team_color" aria-label="Risk Team tag color"></label>
+    </div>
+  </section>
+  <div class="settings-actions"><button class="button primary" name="action" value="save">Save changes</button><button class="button" name="action" value="reset" formnovalidate>Restore defaults</button></div>
+</form>

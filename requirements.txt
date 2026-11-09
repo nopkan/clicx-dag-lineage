@@ -1,0 +1,4 @@
+pyarrow>=19,<24
+openai>=2,<3
+python-dotenv>=1,<2
+markdown-it-py>=3,<5
