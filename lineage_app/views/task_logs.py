@@ -25,7 +25,7 @@ def saved_logs(diag):
             log=diag.get('log'),status=diag.get('log_status',{}))]
     return []
 
-def task_log(store,params,download=False):
+def task_log(store,params,download=False,theme='light'):
     dag,run,task=(params.get(k,'') for k in ('dag','run','task'))
     meta=store.metadata()
     if not meta:raise ValueError('Load a saved snapshot first.')
@@ -84,4 +84,5 @@ def task_log(store,params,download=False):
             tone=' log-error' if 'ERROR' in line or 'Traceback' in line else ' log-warning' if 'WARNING' in line else ''
             rendered.append(f'<div class="task-log-line{tone}"><span class="task-log-number" aria-hidden="true">{number}</span><code>{e(line) or " "}</code></div>')
         body+='<div class="task-log-lines" tabindex="0" role="region" aria-label="Saved log lines">'+''.join(rendered)+'</div>'
-    return shell('Task log','<main class="task-log-page">'+header+notice+body+'</main>')
+    # The log is its own page inside an iframe: it follows the viewer's light/dark choice.
+    return shell('Task log',f'<main class="task-log-page{" dark" if theme=="dark" else ""}">'+header+notice+body+'</main>')

@@ -49,14 +49,24 @@ def fmt(value,with_date=True):
     if value.tzinfo:value=value.astimezone(BKK)
     return value.strftime('%d %b %Y · %H:%M' if with_date else '%H:%M:%S')
 def label(d):return d.get('dag_display_name') or d['dag_id']
-def tags(d):return [(t['name'] if isinstance(t,dict) else str(t)).strip() for t in (d.get('tags') or [])]
+def tags(d):
+    """A DAG's tags; a packed 'team:x, project:y' string counts as separate tags."""
+    from lineage_app.data.dag_tags import split_packed
+    return [part for t in (d.get('tags') or []) for part in split_packed((t['name'] if isinstance(t,dict) else str(t)).strip())]
 TAG_KEYS=('layer','project','upstream','frequency','team','stakeholder')  # fixed keys offered in the Tag dropdown
 def tag_pills(d):return ''.join(f'<span class="tag-pill">{e(t)}</span>' for t in tags(d)[:3])
-def airflow_badge(dag,run=None,metadata=None):
+def airflow_team(dag,run=None,metadata=None):
+    """(display name, CSS class) of the Airflow a DAG belongs to; colours follow Settings."""
     source=dag.get('airflow_source') or (run or {}).get('airflow_source') or (metadata or {}).get('source_name') or '—'
     source={'Our Airflow':'Data Platform','Other Airflow':'Risk Team'}.get(source,source)
-    color={'Data Platform':'data-platform','Risk Team':'risk-team'}.get(source,'unknown')
+    return source,{'Data Platform':'data-platform','Risk Team':'risk-team'}.get(source,'unknown')
+def airflow_badge(dag,run=None,metadata=None):
+    source,color=airflow_team(dag,run,metadata)
     return f'<span class="airflow-team-badge {color}">{e(source)}</span>'
+def airflow_dot(dag):
+    """Small dot in the Data Platform / Risk Team colour (Settings → tag colours)."""
+    source,color=airflow_team(dag)
+    return f'<span class="airflow-dot {color}" title="{e(source)}" aria-label="{e(source)}" role="img"></span>' if color!='unknown' else ''
 def safe_link(url):
     return e(url) if urlsplit(url or '').scheme in ('https','http') else '#'
 
@@ -67,11 +77,16 @@ def snapshot_options(choices,selected):
                    +''.join(option(c['key'],c['name']+' · '+c['stage'].upper(),selected) for c in choices if c['date']==day)
                    +'</optgroup>' for day in days)
 
-def connect_page(csrf,error='',settings=None):
-    settings=settings or {}
+def connect_page(csrf,error='',settings=None,saved=None):
+    """Import page. `saved` maps each environment to its newest saved snapshot ({'date','collected_at'})."""
+    settings=settings or {};saved=saved or {}
     stage=settings.get('stage','uat')
+    newest=' · '.join(f'{s.upper()} {snapshot_label(v["date"],v.get("collected_at",""))}' for s,v in saved.items())
+    # Same form, no download: opens the newest date already saved for the chosen environment.
+    latest=(f'<button class="button connect-latest" type="submit" formaction="/latest" formnovalidate'
+            f'{"" if saved else " disabled"}>Use latest saved data <span>{e(newest) if saved else "Nothing saved yet"}</span></button>')
     body=template('templates/connect.html',csrf=e(csrf),error=f'<div role="alert" class="error-box">{e(error)}</div>' if error else '',
-        s3_uri=e(settings.get('s3_uri','')),stages=''.join(option(v,v.upper(),stage) for v in ('uat','dev','prd')))
+        s3_uri=e(settings.get('s3_uri','')),stages=''.join(option(v,v.upper(),stage) for v in ('uat','dev','prd')),latest=latest)
     return shell('Connect',body)
 
 def progress_page(csrf,job):
@@ -140,14 +155,18 @@ class Workspace:
         # Tags popup: one chosen value per fixed key (tag_layer=consumption&tag_project=ccd); a DAG must match all of them.
         picked=[f'{k}:{self.params[f"tag_{k}"].strip()}' for k in TAG_KEYS if self.params.get(f'tag_{k}','').strip()]
         if self.view=='dependency' and self.params.get('scope')!='tasks':q=''
+        # Projects pass upstream from the DAGs they feed; tag filters treat them like the DAG's own tags.
+        from lineage_app.data.dag_tags import inherited_projects
+        self.inherited=inherited_projects(data['inventory'],data.get('dag_links',[]))
         self.inventory=[]
         for d in data['inventory']:
             text=' '.join([d['dag_id'],label(d),*tags(d),*(d.get('owners') or [])])
             latest=(self.by_dag.get(d['dag_id']) or [{}])[0]
+            effective=self.effective_tags(d)
             if q and q not in text.lower():continue
-            if tag and tag not in tags(d):continue
-            if tag_q and not any(tag_q in t.lower() for t in tags(d)):continue
-            if picked and not all(p in tags(d) for p in picked):continue
+            if tag and tag not in effective:continue
+            if tag_q and not any(tag_q in t.lower() for t in effective):continue
+            if picked and not all(p in effective for p in picked):continue
             if state and (latest.get('dag_state') or 'no_runs') != state:continue
             self.inventory.append(d)
         if self.view=='lineage':
@@ -177,13 +196,22 @@ class Workspace:
             if any(self.task_id in pair and prefix not in expanded for prefix,pair in groups.items()):
                 self.task_id='';self.params.pop('task',None)
 
+    def effective_tags(self,d):
+        """The DAG's own tags, team:<x> for an 'x.team' tag, and project:<name> for each project inherited from downstream."""
+        own=tags(d)
+        # 'cortex.team' is how some Risk Team DAGs name their team: filter it as team:cortex too.
+        teams=[f'team:{t[:-5].strip()}' for t in own if t.casefold().endswith('.team') and ':' not in t and t[:-5].strip()]
+        extra=teams+[f'project:{p}' for p in self.inherited.get(d['dag_id'],{})]
+        return own+[t for i,t in enumerate(extra) if t not in own and t not in extra[:i]]
+
     def url(self,**changes):
         params={**self.params,'view':self.view,**changes}
         if changes.get('view') and changes['view']!=self.view:
             params.pop('saved',None)
             if changes['view']=='dependency':params['zoom']='1'
             params.pop('fullscreen',None);params.pop('dependency_fullscreen',None)
-            if self.view=='dependency':params.pop('dag_search',None);params.pop('q',None)
+            if self.view=='dependency':
+                for key in ('dag_search','q','move_dag','move_to','move_end'):params.pop(key,None)
             if self.view=='performance':params.pop('perf_run',None);params.pop('perf_task',None)
             if self.view=='planner':
                 for key in list(params):
@@ -243,7 +271,7 @@ class Workspace:
         if self.view=='settings':warning_html=''
         states=option('','All states',self.params.get('state',''))+''.join(option(s,human(s),self.params.get('state','')) for s in ('success','failed','running','queued','no_runs'))
         state_filter='' if self.view in ('overview','performance','troubleshooting') else '<select name="state" aria-label="Filter state">'+states+'</select>'
-        all_tags=sorted({t for d in self.data['inventory'] for t in tags(d)})
+        all_tags=sorted({t for d in self.data['inventory'] for t in self.effective_tags(d)})
         tag_controls=self.tag_filter_fields(all_tags)
         global_filters='' if self.view in ('raws','health','ai','settings','planner') else template('templates/filters.html',view=self.view,
             dag=e(self.dag_id),query=e(self.params.get('q','')),state_filter=state_filter,source_filters=self.source_filter_fields(),

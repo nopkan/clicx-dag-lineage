@@ -19,6 +19,10 @@ HEADER=34
 GAP=10         # space between the upstream / selected / downstream groups
 PLOT=1000      # preferred plot width before the pixels-per-minute clamp
 GREY='#b9c5cb';BLUE='#2f6fdb';RED='#d64f47'
+# Click-to-edit the selected DAG's bar (no JavaScript): Move keeps the length, Start/End move one edge.
+MODES={'move':('Move','Click a time on the blue row to move the run there (same length)'),
+       'start':('Start','Click a time on the blue row to extend or shrink its start'),
+       'end':('End','Click a time on the blue row to extend or shrink its end')}
 INK='#33444f';MUTED='#8a9aa2'
 
 
@@ -83,7 +87,9 @@ def gantt_rows(m):
     up=levels(focus,m['graph']['up']);down={d:v for d,v in levels(focus,m['graph']['down']).items() if d not in up}
     key_up=lambda d:(-up[d],finish(base[d]) is None,finish(base[d]) or datetime.min,d)
     key_down=lambda d:(down[d],base[d]['start'] is None,base[d]['start'] or datetime.min,d)
-    return sorted(up,key=key_up),[focus],sorted(down,key=key_down)
+    # A DAG with no run that day and no clock schedule has nothing to place or check: leave it out.
+    shown=lambda d:base[d]['start'] is not None or base[d]['state'] is not None
+    return sorted(filter(shown,up),key=key_up),[focus],sorted(filter(shown,down),key=key_down)
 
 
 def planner_svg(model,interactive=True,only_conflicts=False,prefix=''):
@@ -206,6 +212,7 @@ def gantt_details(w,m,red,keys):
         if dag in red:
             if dag in up:why=f'Might intercept: still running {span((finish(base[dag])-f["start"]).total_seconds())} after the selected DAG starts.'
             else:why=f'Might intercept: starts {span((finish(f)-base[dag]["start"]).total_seconds())} before the selected DAG finishes.'
+            if base[dag].get('mock'):why+=' (No run that day: checked at its scheduled time as a mock 60-minute run.)'
         heading=f'<div class="dependency-detail-heading"><h2>{e(label(d))}</h2>{status(row.get("dag_state")) if row else ""}</div>'
         intro=f'<p class="gantt-relation {("red" if dag in red else "blue" if dag==focus else "")}">{e(relation)}</p>'+(f'<p class="gantt-why">{e(why)}</p>' if why else '')
         run=_facts([('Started',fmt(row.get('dag_started_at_bkk'),False) if row.get('dag_started_at_bkk') else None),
@@ -213,7 +220,9 @@ def gantt_details(w,m,red,keys):
                     ('Duration',span(row['dag_duration_seconds'] if row.get('dag_duration_seconds') is not None else base[dag]['duration']) if (row.get('dag_duration_seconds') is not None or base[dag]['duration'] is not None) else None),
                     ('Queued',fmt(row.get('dag_queued_at_bkk'),False) if row.get('dag_queued_at_bkk') else None),
                     ('Run type',row.get('run_type')),('Triggered by',row.get('dag_run_triggered_by')),
-                    ('Run ID',row.get('run_id'))]) if row else '<p class="muted">No run in this snapshot.</p>'
+                    ('Run ID',row.get('run_id'))]) if row else (
+            f'<p class="muted">No run in this snapshot. Planned {clock(base[dag]["start"],day)} → {clock(base[dag]["end"],day)}: checked as a mock 60-minute run.</p>'
+            if base[dag].get('mock') else '<p class="muted">No run in this snapshot.</p>')
         links=[]
         if row.get('dag_run_url'):links.append(f'<a class="button small" href="{e(row["dag_run_url"])}" target="_blank" rel="noopener noreferrer">Open in Airflow ↗</a>')
         if row and hasattr(w,'url'):
@@ -238,7 +247,35 @@ def gantt_details(w,m,red,keys):
     return ''.join(out)
 
 
-def gantt_html(m,interactive=True,w=None):
+def edit_slots(m,mode,low,high,frun):
+    """Invisible click targets along the blue row: each one is a link that sets the experiment times."""
+    day=m['day'];focus=m['focus'];midnight=datetime.combine(day,datetime.min.time())
+    total=(high-low).total_seconds()/60
+    step=next((v for v in (1,2,5,10,15,30,60) if total/v<=120),60)
+    start,end=frun['start'],finish(frun)
+    duration=(end-start) if start and end else None
+    def pct(t):return (t-low).total_seconds()/(high-low).total_seconds()*100
+    out=[];minute=math.ceil((low-midnight).total_seconds()/60/step)*step
+    while midnight+timedelta(minutes=minute)<high:
+        t=midnight+timedelta(minutes=minute);minute+=step
+        params=dict(view='planner',plan_dag=focus,plan_mode=mode)
+        if mode=='move':
+            if t.date()!=day:continue
+            params['plan_start']=t.strftime('%H:%M')
+            if duration is not None:params['plan_end']=(t+duration).strftime('%H:%M')
+            what=f'Move to {clock(t,day)}'+(f' → {clock(t+duration,day)}' if duration is not None else '')
+        elif mode=='start':
+            if t.date()!=day or not end or t>=end:continue
+            params.update(plan_start=t.strftime('%H:%M'),plan_end=end.strftime('%H:%M'));what=f'Start at {clock(t,day)} (ends {clock(end,day)})'
+        else:
+            if not start or t<=start or t-start>=timedelta(days=1):continue
+            params.update(plan_start=start.strftime('%H:%M'),plan_end=t.strftime('%H:%M'));what=f'End at {clock(t,day)} (starts {clock(start,day)})'
+        x=max(0.0,pct(t));width=max(0.05,min(100.0,pct(t+timedelta(minutes=step)))-x)
+        out.append(f'<a class="gantt-slot" href="/app?{e(urlencode(params))}" aria-label="{e(what)}"><rect x="{x:.3f}%" y="0" width="{width:.3f}%" height="30"><title>{e(what)}</title></rect></a>')
+    return ''.join(out)
+
+
+def gantt_html(m,interactive=True,w=None,mode=''):
     """Responsive Gantt: a fixed name column and a timeline that fills the remaining width.
 
     Each row is its own small SVG with x positions in percent, so the time range
@@ -250,7 +287,11 @@ def gantt_html(m,interactive=True,w=None):
     shown=[d for g in groups for d in g]
     domain=time_domain([v for d in shown for v in (base[d]['start'],finish(base[d])) if v is not None]+[v for v in (frun['start'],finish(frun)) if v is not None])
     if not domain:return '<div class="gantt-empty">No runs in this snapshot for these DAGs.</div>'
-    low,high=domain;total=(high-low).total_seconds()
+    low,high=domain
+    if mode:
+        # Room to move or stretch the bar past today's runs (never before the snapshot day).
+        low=max(datetime.combine(day,datetime.min.time()),low-timedelta(hours=1));high+=timedelta(hours=1)
+    total=(high-low).total_seconds()
     def pct(t):return max(0.0,min(100.0,(t-low).total_seconds()/total*100))
     marks=ticks(low,high,day)
     grid=''.join(f'<line x1="{pct(t):.3f}%" x2="{pct(t):.3f}%" y1="0" y2="100%" stroke="#eef2f4"/>' for t in marks)
@@ -273,7 +314,7 @@ def gantt_html(m,interactive=True,w=None):
             color={'blue':BLUE,'red':RED,'grey':GREY}[tone]
             name=label(m['inventory'][dag]) if dag in m['inventory'] else dag
             state=base[dag].get('state')
-            if state is None and not base[dag].get('start'):badge='<span class="state no-run">No run</span>'
+            if base[dag].get('mock') or (state is None and not base[dag].get('start')):badge='<span class="state no-run" title="No run that day; checked as a planned 60-minute run">No run</span>'
             else:badge=status(state)
             title=f'<span class="gantt-label" title="{e(dag)}">{e(name)}</span>{badge}'
             start,done=row['start'],finish(row);bar=''
@@ -281,7 +322,12 @@ def gantt_html(m,interactive=True,w=None):
                 x=pct(start);bar_width=max(0.25,pct(done)-x)
                 when=f'{clock(start,day)} → {clock(done,day)}'+(' (still running)' if row['end'] is None else f' · {span(row["duration"])}')
                 fill=f'url(#run-{tone})' if row['end'] is None else color
-                bar=f'<rect class="planner-run" x="{x:.3f}%" y="8" width="{bar_width:.3f}%" height="14" rx="3" fill="{fill}"><title>{e(dag)} · {e(when)}</title></rect>'
+                if base[dag].get('mock') and not (selected and experiment(m)):
+                    # No run that day: a planned 60-minute mock run, drawn as a dashed outline.
+                    when=f'no run · planned {clock(start,day)} → {clock(done,day)} (mock 60m)'
+                    bar=(f'<rect class="planner-run planner-mock" x="{x:.3f}%" y="8" width="{bar_width:.3f}%" height="14" rx="3" fill="{color}" fill-opacity=".22" '
+                         f'stroke="{color}" stroke-dasharray="4 3"><title>{e(dag)} · {e(when)}</title></rect>')
+                else:bar=f'<rect class="planner-run" x="{x:.3f}%" y="8" width="{bar_width:.3f}%" height="14" rx="3" fill="{fill}"><title>{e(dag)} · {e(when)}</title></rect>'
             elif start:
                 bar=f'<rect class="planner-run" x="{pct(start):.3f}%" y="8" width="3" height="14" fill="{color}"><title>{e(dag)} · starts {clock(start,day)} · end unknown</title></rect>'
             if selected and experiment(m):
@@ -291,11 +337,17 @@ def gantt_html(m,interactive=True,w=None):
                     ghost=(f'<rect class="planner-actual" x="{gx:.3f}%" y="8" width="{gw:.3f}%" height="14" rx="3" fill="none" stroke="{BLUE}" stroke-opacity=".45" stroke-dasharray="3 2">'
                            f'<title>{e(dag)} · actual run {clock(real["start"],day)} → {clock(finish(real),day)}</title></rect>')
                 bar=ghost+bar.replace(f'<title>{e(dag)} · ',f'<title>{e(dag)} · experiment ',1)
+            if selected and mode and w is not None:
+                edge=frun['start'] if mode=='start' else finish(frun) if mode=='end' else None
+                if edge:bar+=f'<line class="gantt-handle" x1="{pct(edge):.3f}%" x2="{pct(edge):.3f}%" y1="4" y2="26" stroke="{BLUE}" stroke-width="4" stroke-linecap="round"/>'
+                bar+=edit_slots(m,mode,low,high,frun)
             tag,pick='div',''
             if w is not None:
                 tag='label';pick=f'<input type="radio" class="gantt-select" name="gantt_sel" id="{keys[dag]}" aria-label="Show details for {e(dag)}">'
             attrs=f' for="{keys[dag]}"' if w is not None else ''
-            body.append(f'<{tag}{attrs} class="gantt-row {tone}" data-planner-dag="{e(dag)}" data-row="{"selected" if selected else tone}"{" id=\"planner-focus\"" if selected else ""}>{pick}'
+            if selected and mode:tone_class=f'{tone} editing'
+            else:tone_class=tone
+            body.append(f'<{tag}{attrs} class="gantt-row {tone_class}" data-planner-dag="{e(dag)}" data-row="{"selected" if selected else tone}"{" id=\"planner-focus\"" if selected else ""}>{pick}'
                         f'<div class="gantt-name">{title}</div>'
                         f'<svg class="gantt-track" width="100%" height="30" role="presentation">{grid}{guides}{bar}</svg></{tag}>')
     patterns=''.join(f'<pattern id="run-{name}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="{color}" fill-opacity=".35"/><rect width="3" height="6" fill="{color}"/></pattern>'
@@ -326,7 +378,8 @@ def export_plan(w):
 
 def planner(w):
     suggestions=''.join(f'<option value="{e(d["dag_id"])}">{e(label(d))}</option>' for d in sorted(w.data['inventory'],key=lambda d:d['dag_id']))
-    # Only the experiment's start/end are used; other old what-if fields are ignored.
+    mode=w.params.get('plan_mode') if w.params.get('plan_mode') in MODES else ''
+    # Only the experiment's start/end (and the click-to-edit mode) are used; other old what-if fields are ignored.
     for key in [k for k in w.params if k.startswith('plan_') and k not in ('plan_dag','plan_start','plan_end')]:w.params.pop(key,None)
     for key in ('plan_start','plan_end'):
         if not w.params.get(key):w.params.pop(key,None)
@@ -339,7 +392,14 @@ def planner(w):
     if experiment(m):
         chip=(f'<a class="gantt-exp-chip" href="{e(reset)}" title="Clear the experiment and show the real run">'
               f'Experiment {clock(run["start"],day)} → {clock(run["end"],day) if run["end"] else "?"}<span aria-hidden="true">×</span></a>')
-    return template('templates/planner.html',dag=e(m['focus']),suggestions=suggestions,graph=gantt_html(m,w=w),
+    keep={k:w.params[k] for k in ('plan_start','plan_end') if w.params.get(k)}
+    def mode_link(key):
+        query=dict(view='planner',plan_dag=m['focus'],**keep,**({} if key==mode else {'plan_mode':key}))
+        name,hint=MODES[key]
+        return f'<a class="gantt-mode{" active" if key==mode else ""}" href="/app?{e(urlencode(query))}" title="{e(hint)}"{" aria-current=\"true\"" if key==mode else ""}>{e(name)}</a>'
+    modes=('<nav class="gantt-modes" aria-label="Edit the selected DAG on the chart">'+''.join(mode_link(k) for k in MODES)+'</nav>'
+           +(f'<span class="gantt-mode-hint">{e(MODES[mode][1])}</span>' if mode else ''))
+    return template('templates/planner.html',dag=e(m['focus']),suggestions=suggestions,graph=gantt_html(m,w=w,mode=mode),modes=modes,
         exp_start=e(run['start'].strftime('%H:%M') if run['start'] else ''),
         exp_end=e((w.params.get('plan_end') or '')[:5]),
         exp_open='open' if w.params.get('plan_edit')=='1' else '',reset=e(reset),chip=chip)

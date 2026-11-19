@@ -98,6 +98,22 @@ class HTTPTests(unittest.TestCase):
             if time.monotonic()>deadline:self.fail('Collection did not finish')
             time.sleep(.02)
         with self.get('/progress') as response:return response.read().decode(),response.url
+    def test_use_latest_saved_data_opens_newest_local_date_without_aws(self):
+        base='https://airflow.example.com';result=sample_collection()
+        app.store_for('uat',base).save_collection(result,base,'uat',source_info=dict(source_name='Sample Airflow'))
+        csrf=self.csrf()
+        with self.get('/') as response:page=response.read().decode()
+        self.assertIn('formaction="/latest" formnovalidate>Use latest saved data <span>UAT ',page)
+        newest=app.snapshot_list('uat')[0]['date']
+        # The S3 folder may be blank: this button never downloads (AWS download is patched to fail).
+        with self.post('/latest',dict(csrf=csrf,stage='uat',s3_uri='')) as response:
+            self.assertTrue(response.url.endswith('/app'));response.read()
+        session=next(s for s in app.SESSIONS.values() if s['csrf']==csrf)
+        self.assertEqual(session['cache'],f'uat@{newest}');self.assertEqual(session['mode'],'cached')
+        with self.assertRaises(HTTPError) as caught:self.post('/latest',dict(csrf=csrf,stage='prd'))
+        self.assertEqual(caught.exception.code,400)
+        self.assertIn('No saved data for PRD yet. Click Import data to download it.',caught.exception.read().decode())
+
     def test_refresh_reuses_token_and_local_data_refresh_reimports_without_airflow(self):
         csrf=self.csrf();self.collect_live(csrf)
         session=next(s for s in app.SESSIONS.values() if s['csrf']==csrf)

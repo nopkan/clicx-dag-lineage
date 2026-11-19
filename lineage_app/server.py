@@ -283,7 +283,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def redirect(self,url):self.send('',303,extra={'Location':url})
     def connection_page(self,session,error='',values=None):
-        return connect_page(session['csrf'],error,values or import_settings(self.headers.get('Cookie','')))
+        saved={}
+        for stage in STAGES:
+            days=snapshot_list(stage)
+            if days:saved[stage]=days[0]
+        return connect_page(session['csrf'],error,values or import_settings(self.headers.get('Cookie','')),saved)
     def valid_host(self):
         # Docker may publish a different host port than the container listens on.
         # Keep the hostname restricted to loopback, while accepting that mapping.
@@ -364,7 +368,8 @@ class Handler(BaseHTTPRequestHandler):
                 from lineage_app.views.task_logs import task_log
                 store=session_store(session)
                 with store.lock:
-                    try:body=task_log(store,params,download=path.endswith('/download'))
+                    theme=preferences.read(self.headers.get('Cookie','')).get('theme','light')
+                    try:body=task_log(store,params,download=path.endswith('/download'),theme=theme)
                     except ValueError as exc:self.send(str(exc),404,mime='text/plain',embedded=True);return
                 if path.endswith('/download'):
                     self.send(body,mime='text/plain; charset=utf-8',extra={'Content-Disposition':'attachment; filename="task-log.txt"'})
@@ -458,6 +463,19 @@ class Handler(BaseHTTPRequestHandler):
                     self.send(self.connection_page(session,str(exc),typed),400);return
                 start_import_job(session,'/app',chosen)
                 self.send('',303,extra={'Location':'/progress','Set-Cookie':import_cookie(chosen)})
+            elif self.path=='/latest':
+                # Open the newest date already saved locally; no AWS sign-in or S3 download.
+                stage=form.get('stage','uat')
+                if stage not in STAGES:raise ValueError('Choose a supported environment.')
+                days=snapshot_list(stage)
+                if not days:
+                    self.send(self.connection_page(session,f'No saved data for {stage.upper()} yet. Click Import data to download it.',
+                        {**import_settings(self.headers.get('Cookie','')),'stage':stage}),400);return
+                current=session.get('airflow','all')
+                clear_tokens(session)
+                open_view(session,stage,days[0]['date'],current if any(c['source']==current for c in cached_sources() if c['date']==days[0]['date']) else 'all')
+                session['mode']='cached'
+                self.redirect('/app')
             elif self.path=='/settings':
                 if not session.get('cache'):self.redirect('/');return
                 draft=dict(tabs=submitted.get('tabs',[]),start=form.get('start'),density=form.get('density'),text=form.get('text'),

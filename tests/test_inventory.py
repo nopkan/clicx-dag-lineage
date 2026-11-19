@@ -113,4 +113,42 @@ class InventoryTests(unittest.TestCase):
                 self.assertEqual(link['target'],'_blank')
                 self.assertEqual(link['rel'],'noopener noreferrer')
 
+    def test_inherited_projects_are_coloured_and_filterable(self):
+        data=copy.deepcopy(self.data)
+        inv={d['dag_id']:d for d in data['inventory']}
+        top,middle,leaf=sorted(inv)[:3]
+        inv[top]['tags']=['team:dp']
+        inv[middle]['tags']=[f'upstream:{top}']
+        inv[leaf]['tags']=[f'upstream:{middle}','project:risk_mart']
+        w,html,rows=self.render(data)
+        for dag in (top,middle):
+            self.assertIn('project:risk_mart',rows.rows[dag]['tags']['text'])
+        self.assertIn(f'class="tag-pill inherited-tag" title="Inherited from downstream: {leaf}">project:risk_mart</span>',html)
+        self.assertNotIn('inherited-tag',html.split(f'data-dag="{leaf}"',1)[1].split('</tr>',1)[0])  # Own tag, plain colour.
+        # The Tags popup and Search tags both find inherited projects.
+        for params in (dict(tag_project='risk_mart'),dict(tag_q='risk_mart')):
+            shown=self.render(data,**params)[2]
+            self.assertEqual(set(shown.rows),{top,middle,leaf},params)
+        self.assertIn('<option value="risk_mart">risk_mart</option>',w.render())
+
+
+    def test_packed_tags_split_and_dot_team_filters_as_team(self):
+        from lineage_app.views.render import tags
+        data=copy.deepcopy(self.data)
+        inv={d['dag_id']:d for d in data['inventory']}
+        packed,dotted=sorted(inv)[:2]
+        inv[packed]['tags']=['team:risk_de, project:batch_restriction, frequency:monthly','upstream:a, b']
+        inv[dotted]['tags']=['cortex.team']
+        # One Airflow tag holding three tags counts as three; 'upstream:a, b' stays one tag.
+        self.assertEqual(tags(inv[packed]),['team:risk_de','project:batch_restriction','frequency:monthly','upstream:a, b'])
+        w=self.render(data)[0];page=w.render()
+        team=page.split('id="tag-pick-team"',1)[1].split('</select>',1)[0]
+        self.assertIn('<option value="risk_de">risk_de</option>',team)
+        self.assertIn('<option value="cortex">cortex</option>',team)
+        self.assertNotIn('project:',team)
+        self.assertEqual(set(self.render(data,tag_team='risk_de')[2].rows),{packed})
+        self.assertEqual(set(self.render(data,tag_team='cortex')[2].rows),{dotted})
+        self.assertEqual(set(self.render(data,tag_project='batch_restriction')[2].rows),{packed})
+
+
 if __name__=='__main__':unittest.main()

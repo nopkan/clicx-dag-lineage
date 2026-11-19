@@ -216,7 +216,21 @@ class PlannerTests(unittest.TestCase):
         row=lambda d:page[page.index(f'data-planner-dag="{d}"'):page.index('</label>',page.index(f'data-planner-dag="{d}"'))]
         self.assertIn('<span class="state success">Success</span>',row('A'))
         self.assertIn('<span class="state failed">Failed</span>',row('B'))
-        self.assertIn('<span class="state no-run">No run</span>',row('C'))
+        self.assertNotIn('data-planner-dag="C"',page)  # no run and no clock schedule: not shown
+
+    def test_scheduled_dag_without_a_run_is_a_60_minute_mock_and_can_intercept(self):
+        from lineage_app.views.planner import planner
+        w=self.workspace();w.by_dag['C']=[]
+        next(d for d in w.data['inventory'] if d['dag_id']=='C')['timetable_summary']='15 3 * * *'
+        m=plan_model(w)
+        self.assertTrue(m['baseline']['C']['mock'])
+        self.assertEqual((m['baseline']['C']['start'].strftime('%H:%M'),m['baseline']['C']['end'].strftime('%H:%M')),('03:15','04:15'))
+        page=planner(w)  # F runs 03:00-03:30; C (2 levels down) is planned 03:15, before F finishes
+        row=page[page.index('data-planner-dag="C"'):page.index('</label>',page.index('data-planner-dag="C"'))]
+        self.assertIn('data-row="red"',row);self.assertIn('class="state no-run"',row);self.assertIn('planner-mock',row)
+        self.assertIn('no run · planned 03:15 → 04:15 (mock 60m)',row)
+        box=page[page.index('data-dag-detail="C"'):]
+        self.assertIn('checked at its scheduled time as a mock 60-minute run',box)
 
     def test_experiment_moves_the_selected_dag_and_rechecks_every_dependency(self):
         from lineage_app.views.planner import planner
@@ -235,5 +249,32 @@ class PlannerTests(unittest.TestCase):
         self.assertIn('value="02:40"',page)
         page=planner(self.workspace(plan_start='03:45',plan_buffer='20'))  # other old what-if fields are ignored
         self.assertIn('Experiment 03:45 → 04:15',page)
+
+    def test_click_to_edit_moves_or_stretches_the_selected_bar(self):
+        from html import unescape
+        from urllib.parse import parse_qs,urlsplit
+        from lineage_app.views.planner import planner
+        def slots(page):
+            row=page[page.index('data-planner-dag="F" data-row="selected"'):]
+            row=row[:row.index('</label>')]
+            return {q['plan_start'][0] if 'plan_mode' in q and q['plan_mode']!=['end'] else q['plan_end'][0]:q
+                    for q in (parse_qs(urlsplit(unescape(h)).query) for h in re.findall(r'<a class="gantt-slot" href="([^"]+)"',row))}
+        plain=planner(self.workspace())
+        self.assertNotIn('gantt-slot',plain);self.assertIn('class="gantt-modes"',plain)  # clean chart until a mode is picked
+        moves=slots(planner(self.workspace(plan_mode='move')))  # F runs 03:00-03:30 today
+        q=moves['03:45']
+        self.assertEqual((q['plan_dag'],q['plan_start'],q['plan_end'],q['plan_mode']),(['F'],['03:45'],['04:15'],['move']))
+        self.assertIn('01:00',moves)  # one hour of room before today's first run (02:00)
+        starts=slots(planner(self.workspace(plan_mode='start')))
+        self.assertEqual(starts['02:30']['plan_end'],['03:30'])        # left edge moves, end stays
+        self.assertTrue(all(t<'03:30' for t in starts))                # never past the end
+        ends=slots(planner(self.workspace(plan_mode='end')))
+        self.assertEqual(ends['04:10']['plan_start'],['03:00'])        # right edge moves, start stays
+        self.assertTrue(all(t>'03:00' for t in ends))
+        # Following a link is the normal experiment: B (starts 04:00) is now red.
+        page=planner(self.workspace(plan_start='03:00',plan_end='04:10',plan_mode='end'))
+        self.assertIn('Experiment 03:00 → 04:10',page);self.assertIn('data-planner-dag="B" data-row="red"',page)
+        self.assertIn('class="gantt-mode active" href',page);self.assertIn('class="gantt-handle"',page)
+        self.assertNotIn('<script',page)
 
 if __name__=='__main__':unittest.main()

@@ -1,11 +1,34 @@
 """Read-only schedule scenarios using today's measurements and recorded DAG links (tags + Airflow dependencies)."""
 import hashlib
 import math
+import re
 from collections import defaultdict,deque
-from datetime import datetime,timedelta
+from datetime import datetime,time,timedelta
 
 from lineage_app.data.dag_tags import dependency_graph
 from lineage_app.data.model import BKK,trace
+
+
+# Shared by Schedule and Dependency: a DAG with a clock schedule but no run that day is placed at its
+# scheduled time and checked as a mock run of this length. DAGs with no run and no schedule are not shown.
+MOCK_MINUTES=60  # A DAG with no run that day is checked as a mock 60-minute run from its scheduled time.
+CRON=re.compile(r'\s*(\S+)\s+(\S+)\s+\S+\s+\S+\s+\S+\s*')
+ALIASES={'@daily':'0 0 * * *','@midnight':'0 0 * * *','@hourly':'0 * * * *','@weekly':'0 0 * * 0','@monthly':'0 0 1 * *','@yearly':'0 0 1 1 *','@annually':'0 0 1 1 *'}
+
+
+def planned_time(dag,day):
+    """First clock time of a DAG's cron schedule on `day` (DAG timezone is Bangkok), or None
+    when it has no clock schedule ('None', assets, triggers only)."""
+    text=str(dag.get('timetable_summary') or '').strip()
+    match=CRON.fullmatch(ALIASES.get(text,text))
+    if not match:return None
+    def first(field,top):
+        part=field.split(',')[0].split('/')[0].split('-')[0]
+        if part=='*':return 0
+        return int(part) if part.isdigit() and int(part)<=top else None
+    minute,hour=first(match[1],59),first(match[2],23)
+    if minute is None or hour is None:return None
+    return datetime.combine(day,time(hour,minute))
 
 
 def _clock(value,field):
@@ -62,8 +85,12 @@ def plan_model(w):
         if not completed or (start and end and end<start):end=None
         # An unfinished run is drawn up to collection time; it is never a duration.
         running=bool(row and start and not completed and collected and collected>start)
+        planned=planned_time(inventory[dag],w.day) if not row and dag in inventory else None
+        if planned:
+            # No run that day but a clock schedule: check it as a mock run from its scheduled time.
+            start,end,duration=planned,planned+timedelta(minutes=MOCK_MINUTES),MOCK_MINUTES*60.0
         baseline[dag]=dict(start=start,end=end,duration=duration,state=row.get('dag_state') if row else None,
-            run_id=row.get('run_id') if row else None,running_until=collected if running else None)
+            run_id=row.get('run_id') if row else None,running_until=collected if running else None,mock=bool(planned))
         scenario[dag]=dict(start=start,end=(start+timedelta(seconds=duration*(1+buffer/100))) if start and duration is not None else end if buffer==0 else None,
             duration=duration*(1+buffer/100) if duration is not None else None)
         if row and row.get('dag_state')=='failed':failures.append(dag)

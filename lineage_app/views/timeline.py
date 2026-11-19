@@ -3,18 +3,55 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
 GROUPS=('Persist Data Layer','Curate Data Layer','Consumption Data Layer','Outbound','Risk','GT','Other')
-# Column order on screen: Risk comes after Outbound and Other. GROUPS keeps each column's colour index.
-ORDER=('Persist Data Layer','Curate Data Layer','Consumption Data Layer','Outbound','GT','Other','Risk')
-# Risk Team DAGs have no layer tags; their whole Airflow is the Risk area.
-SOURCE_GROUPS={'Risk Team':'Risk'}
+# Column order on screen: layers, Risk, each Risk Team team, then one Other for both Airflows.
+# GROUPS keeps each column's colour index.
+ORDER=('Persist Data Layer','Curate Data Layer','Consumption Data Layer','Outbound','GT','Risk','Other')
+# Risk Team DAGs have no layer tags; their Airflow is split by team tag instead
+# ("Risk · risk_de"). Risk DAGs without a team share the Data Platform's "Other" column.
+RISK_SOURCES=('Risk Team','Other Airflow')
+RISK_PREFIX='Risk · '
+RISK_OTHER='Other'
 ALIASES={'persist':'Persist Data Layer','curate':'Curate Data Layer','consumption':'Consumption Data Layer',
          'outbound':'Outbound','risk':'Risk','gt':'GT'}
+UNSET=('','unknown','none','n/a','na','null','-')
+
+
+def risk_team(tag):
+    """Team named by a Risk Team tag: 'team:risk_de' or 'cortex.team' (some tags pack 'team:x, project:y')."""
+    tag=tag.strip()
+    if ':' in tag and tag.split(':',1)[0].strip().casefold()=='team':return tag.split(':',1)[1].split(',')[0].strip()
+    if tag.casefold().endswith('.team') and ':' not in tag:return tag[:-5].strip()
+    return None
+
+
+def risk_group(dag):
+    from lineage_app.views.render import tags
+    teams={t for t in map(risk_team,tags(dag)) if t and t.casefold() not in UNSET}
+    return RISK_PREFIX+teams.pop() if len(teams)==1 else RISK_OTHER
+
+
+def group_index(group):
+    """Column colour: Risk teams share the Risk colour; unknown layers use Other's."""
+    if group.startswith(RISK_PREFIX):return GROUPS.index('Risk')
+    return GROUPS.index(group) if group in GROUPS else 6
+
+
+def group_heading(group):
+    """(title, context) for a column header: a Risk team shows its team name, with 'Risk' as context."""
+    return (group[len(RISK_PREFIX):],'Risk · ') if group.startswith(RISK_PREFIX) else (group,'')
+
+
+def column_order(totals):
+    """Standard layers, tag-named layers, Risk, each Risk Team team, then Other (both Airflows) last."""
+    risk=sorted((g for g in totals if g.startswith(RISK_PREFIX)),key=str.casefold)
+    custom=sorted(set(totals)-set(GROUPS)-set(risk))
+    return [g for g in ORDER[:-2] if totals.get(g)]+custom+[g for g in ORDER[-2:-1] if totals.get(g)]+risk+(['Other'] if totals.get('Other') else [])
 
 
 def display_labels(dag):
     """Layer labels come only from Airflow tags, never workbook or DAG names."""
     from lineage_app.views.render import tags
-    if dag.get('airflow_source') in SOURCE_GROUPS:return {'group':SOURCE_GROUPS[dag['airflow_source']]}
+    if dag.get('airflow_source') in RISK_SOURCES:return {'group':risk_group(dag)}
     explicit=set();plain=set()
     def canonical(value):
         return ALIASES.get(value,next((group for group in GROUPS if group.casefold()==value),None))
@@ -49,8 +86,8 @@ def timetable(workspace):
         buckets[(slot,group)].append((when,row,labels));totals[group]+=1
     if task_mode:
         order=['Failed','Upstream failed','Running','Up for retry','Queued','Scheduled','Success','Skipped','No state']
-    else:order=list(ORDER)
-    groups=[g for g in order if totals[g]]+sorted(set(totals)-set(order))
+        groups=[g for g in order if totals[g]]+sorted(set(totals)-set(order))
+    else:groups=column_order(totals)
     # Keep the empty day visible, including both midnight boundaries.
     if not groups:groups=['Tasks' if task_mode else 'DAGs']
     columns={g:max(1,min(2,max((len(items) for (slot,group),items in buckets.items() if group==g),default=1))) for g in groups}
@@ -58,7 +95,7 @@ def timetable(workspace):
     tabs=f'<div class="tab-row"><a class="{"active" if not task_mode else ""}" href="{w.url(scope="dags",fullscreen=None)}">DAGs</a><a class="{"active" if task_mode else ""}" href="{w.url(scope="tasks",fullscreen=None)}">Tasks</a></div>'
     title=f'Tasks · {label(w.dag)}' if task_mode and w.dag else 'DAG timetable'
     header='<thead><tr><th class="timetable-corner" scope="col">Time <span>BKK</span></th>'+''.join(
-        f'<th scope="col" class="timetable-group group-{GROUPS.index(g) if g in GROUPS else 6}"><strong>{e(g)}</strong><span>{totals[g]} {"tasks" if task_mode else "runs"}</span></th>' for g in groups)+'</tr></thead>'
+        f'<th scope="col" class="timetable-group group-{group_index(g)}"><strong>{e(group_heading(g)[0])}</strong><span>{e(group_heading(g)[1])}{totals[g]} {"tasks" if task_mode else "runs"}</span></th>' for g in groups)+'</tr></thead>'
     body=[]
     for slot in range(0,1441,30):
         time=f'{slot//60:02d}:{slot%60:02d}'
@@ -84,7 +121,7 @@ def timetable(workspace):
                     f'<div class="timetable-card-heading"><strong>{e(name)}</strong></div>'
                     f'<div class="timetable-card-time"><span>{queued_label}{when:%H:%M} → {e(end)}</span><span>{e(elapsed(row[duration]))}</span></div>'
                     f'<div class="timetable-card-caption"><span>{e(caption)}</span><span class="timetable-state">{e(state_name)}</span></div></a>')
-            cells.append(f'<td class="timetable-cell group-{GROUPS.index(group) if group in GROUPS else 6}"><div class="timetable-cards" style="--lane-columns:{columns[group]}">'+''.join(cards)+'</div></td>')
+            cells.append(f'<td class="timetable-cell group-{group_index(group)}"><div class="timetable-cards" style="--lane-columns:{columns[group]}">'+''.join(cards)+'</div></td>')
         body.append(f'<tr data-slot="{slot}"><th scope="row" class="timetable-time"><span>{time}</span></th>'+''.join(cells)+'</tr>')
     colgroup='<colgroup><col style="width:88px">'+''.join(f'<col style="width:{widths[g]}px">' for g in groups)+'</colgroup>'
     count=sum(totals.values())

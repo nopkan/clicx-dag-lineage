@@ -9,7 +9,7 @@ from lineage_app.data.model import BKK
 COLUMNS=[
     ('dag','DAG','',320),
     ('airflow','Airflow','Airflow source for this DAG',145),
-    ('tags','Tags','All tags from the saved DAG definition',240),
+    ('tags','Tags','Tags from the saved DAG definition; coloured project tags are inherited from downstream DAGs',240),
     ('owners','Owner','DAG owners',140),
     ('state','Latest state','Latest observed DAG run today',125),
     ('paused','Paused','Saved Airflow pause setting',90),
@@ -85,7 +85,9 @@ def inventory_table(workspace):
         lineage=w.url(view='lineage',dag=dag,run=last.get('run_id'),task=None,focus=None,
             fullscreen=None,dependency_fullscreen=None,expanded=None,native=None,scope=None)
         failed=sum(t['task_state']=='failed' for t in tasks)
-        all_tags=''.join(f'<span class="tag-pill">{e(t)}</span>' for t in tags(d)) or '—'
+        inherited=''.join(f'<span class="tag-pill inherited-tag" title="Inherited from downstream: {e(", ".join(sources))}">project:{e(project)}</span>'
+                          for project,sources in w.inherited.get(dag,{}).items())
+        all_tags=(''.join(f'<span class="tag-pill">{e(t)}</span>' for t in tags(d))+inherited) or '—'
         failure_count=f'<span class="{"failed-task-count" if failed else ""}">{failed}</span><span class="muted"> / {len(tasks)}</span>' if tasks else '—'
         success=(f'<span title="{states["success"]} successful / {finished} finished runs">{states["success"]/finished:.0%}</span>') if finished else '—'
         source=d.get('relative_fileloc') or d.get('fileloc')
@@ -140,4 +142,4 @@ def inventory_table(workspace):
     styles=''.join(f'.inventory-panel:has(#inventory-col-{key}:not(:checked)) .inventory-col-{key}{{display:none}}' for key,title,tip,width in COLUMNS if key not in LOCKED)
     headers=''.join(f'<th scope="col" class="inventory-col-{key}" style="min-width:{width}px;width:{width}px" title="{e(tip)}">'+(e(title) if title else '<span class="screen-reader">Lineage</span>')+'</th>' for key,title,tip,width in COLUMNS)
     table='<div class="table-scroll inventory-scroll" tabindex="0" role="region" aria-label="DAG inventory"><table class="dag-table inventory-table"><caption class="screen-reader">DAG inventory from the current snapshot. Run statistics are limited to today in Bangkok. Run dates and parse timestamps are shown in Bangkok; schedules retain their DAG timezone.</caption><thead><tr>'+headers+'</tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>' if rows else '<div class="empty">No matching DAGs.</div>'
-    return '<style>'+styles+'</style><section class="panel inventory-panel"><div class="panel-heading"><div class="inventory-title"><h2>DAGs</h2><span class="count">'+str(len(rows))+'</span><span class="inventory-timezone">Times · Bangkok</span></div>'+controls+'</div>'+table+'</section>'
+    return '<style>'+styles+'</style><section class="panel inventory-panel"><div class="panel-heading"><div class="inventory-title"><h2>DAGs</h2><span class="count">'+str(len(rows))+'</span><span class="inventory-timezone">Times · Bangkok</span><span class="inventory-legend"><span class="tag-pill inherited-tag">project</span>inherited from downstream</span></div>'+controls+'</div>'+table+'</section>'
